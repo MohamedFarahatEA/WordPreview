@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>WordPreview — Fill &amp; Preview Word Templates</title>
+    <link rel="preconnect" href="data:," />
+    <link rel="stylesheet" href="/css/site.css" />
+</head>
+<body>
+    <header class="app-header">
+        <div class="brand">
+            <span class="brand-mark">📄</span>
+            <div>
+                <h1>WordPreview</h1>
+                <p>Fill <code>{{placeholders}}</code> in a Word file, preview it live, download the result.</p>
+            </div>
+        </div>
+    </header>
+
+    <main class="layout">
+        <!-- LEFT: upload + form -->
+        <section class="panel form-panel">
+            <div id="dropzone" class="dropzone">
+                <input id="fileInput" type="file" accept=".docx" hidden />
+                <div class="dropzone-inner">
+                    <span class="dz-icon">⬆️</span>
+                    <p class="dz-title">Drop a <strong>.docx</strong> here</p>
+                    <p class="dz-sub">or <button type="button" id="browseBtn" class="link-btn">browse</button></p>
+                </div>
+            </div>
+
+            <div id="fileMeta" class="file-meta" hidden>
+                <span class="file-name" id="fileName"></span>
+                <button type="button" id="resetBtn" class="link-btn">Change file</button>
+            </div>
+
+            <div id="fieldsWrap" class="fields" hidden>
+                <div class="fields-head">
+                    <h2>Fields</h2>
+                    <span id="fieldCount" class="badge">0</span>
+                </div>
+                <form id="fieldsForm" autocomplete="off"></form>
+            </div>
+
+            <div id="emptyFields" class="notice" hidden>
+                No <code>{{placeholders}}</code> were found in this document.
+            </div>
+
+            <div class="actions" id="actions" hidden>
+                <button type="button" id="downloadBtn" class="btn btn-primary">
+                    ⬇️ Download filled .docx
+                </button>
+            </div>
+
+            <div id="status" class="status" role="status" aria-live="polite"></div>
+        </section>
+
+        <!-- RIGHT: live preview -->
+        <section class="panel preview-panel">
+            <div class="preview-head">
+                <h2>Preview</h2>
+                <span class="preview-hint" id="previewHint">Upload a document to begin</span>
+            </div>
+            <div id="previewScroll" class="preview-scroll">
+                <div id="preview" class="preview-doc"></div>
+            </div>
+            <div id="previewOverlay" class="preview-overlay" hidden>
+                <div class="spinner"></div>
+            </div>
+        </section>
+    </main>
+
+    <script src="/lib/jszip.min.js"></script>
+    <script src="/lib/docx-preview.min.js"></script>
+    <script src="/js/app.js"></script>
+</body>
+</html>
