@@ -90,8 +90,9 @@ public sealed partial class DocxPlaceholderService
         if (pipe < 0)
         {
             var key = inner.Trim();
-            var t = InferType(key);
-            return new Spec(key, t, t == FieldType.Date ? DefaultDateFormat : null, null);
+            // Format left null = "author specified none"; FormatValue picks the
+            // default (LTR yyyy-MM-dd, or day-first dd-MM-yyyy in Arabic context).
+            return new Spec(key, InferType(key), null, null);
         }
 
         var name = inner[..pipe].Trim();
@@ -110,7 +111,7 @@ public sealed partial class DocxPlaceholderService
         {
             case "date":
                 return new Spec(name, FieldType.Date,
-                    string.IsNullOrWhiteSpace(arg) ? DefaultDateFormat : arg, null);
+                    string.IsNullOrWhiteSpace(arg) ? null : arg, null);
             case "select":
             case "dropdown":
             case "choice":
@@ -125,8 +126,7 @@ public sealed partial class DocxPlaceholderService
             case "text":
                 return new Spec(name, FieldType.Text, null, null);
             default:
-                var inferred = InferType(name);
-                return new Spec(name, inferred, inferred == FieldType.Date ? DefaultDateFormat : null, null);
+                return new Spec(name, InferType(name), null, null);
         }
     }
 
@@ -138,13 +138,27 @@ public sealed partial class DocxPlaceholderService
         return FieldType.Text;
     }
 
-    private static string FormatValue(Spec spec, string raw)
+    // Arabic day-first default (dd-MM-yyyy) so RTL dates read day → month → year
+    // left-to-right (day on the left, year on the right).
+    private const string DefaultRtlDateFormat = "dd-MM-yyyy";
+
+    private static string FormatValue(Spec spec, string raw, bool rtlContext)
     {
         if (spec.Type == FieldType.Date && !string.IsNullOrWhiteSpace(raw))
         {
             // Client sends ISO (yyyy-MM-dd) from the date picker; format per the spec.
             if (DateTime.TryParse(raw, CultureInfo.InvariantCulture, DateTimeStyles.None, out var dt))
-                return dt.ToString(spec.Format ?? DefaultDateFormat, CultureInfo.InvariantCulture);
+            {
+                var fmt = spec.Format ?? DefaultDateFormat;
+                // In an Arabic/RTL paragraph, a plain date (no explicit format) uses
+                // the day-first order and Arabic-Indic digits. An explicit template
+                // format is always honored as-is.
+                bool useRtlDefault = rtlContext && spec.Format is null;
+                if (useRtlDefault) fmt = DefaultRtlDateFormat;
+
+                var formatted = dt.ToString(fmt, CultureInfo.InvariantCulture);
+                return rtlContext ? ToArabicIndicDigits(formatted) : formatted;
+            }
         }
         return raw;
     }
@@ -215,17 +229,8 @@ public sealed partial class DocxPlaceholderService
             var m = matches[mi];
             var spec = ParseSpec(m.Groups[1].Value);
             if (!values.TryGetValue(spec.Key, out var raw)) continue; // leave unknown tokens
-            var value = FormatValue(spec, raw ?? string.Empty);
-            if (spec.Type == FieldType.Date && rtlContext && value.Length > 0)
-            {
-                // Arabic-Indic digits, wrapped in a right-to-left isolate so the date
-                // flows RTL like the rest of an Arabic document, as its own isolated
-                // segment (day on the left, year on the right).
-                const char rli = '⁧'; // RIGHT-TO-LEFT ISOLATE
-                const char pdi = '⁩'; // POP DIRECTIONAL ISOLATE
-                value = $"{rli}{ToArabicIndicDigits(value)}{pdi}";
-            }
-            // Dates keep the paragraph's direction (the isolate handles their layout);
+            var value = FormatValue(spec, raw ?? string.Empty, rtlContext);
+            // Dates keep the paragraph's direction (a number renders LTR internally);
             // other fields get a direction tag from their own script.
             ReplaceRange(nodes, starts, lens, m.Index, m.Index + m.Length, value,
                 tagDirection: spec.Type != FieldType.Date);
