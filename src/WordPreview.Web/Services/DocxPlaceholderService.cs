@@ -66,18 +66,41 @@ public sealed partial class DocxPlaceholderService
         }).ToList();
     }
 
+    // Sentinels used only in "marks" mode so the browser can locate each filled
+    // placeholder: START + fieldIndex(digits) + SEP + value + END. Private-use
+    // code points; the client strips them right after measuring.
+    private const char MarkStart = '';
+    private const char MarkSep = '';
+    private const char MarkEnd = '';
+
     /// <summary>
     /// Produces a new .docx with placeholders replaced by <paramref name="values"/>.
     /// Values are formatted per each token's spec (e.g. dates). Unknown tokens are
     /// left as-is; newlines in a value become Word line breaks.
+    /// When <paramref name="marks"/> is true, every placeholder (even blanks) is
+    /// wrapped in locator sentinels for the inline-overlay editor.
     /// </summary>
-    public byte[] Fill(Stream docxStream, IReadOnlyDictionary<string, string> values)
+    public byte[] Fill(Stream docxStream, IReadOnlyDictionary<string, string> values, bool marks = false)
     {
         var ms = ToSeekableCopy(docxStream); // becomes the output buffer
         using (var doc = WordprocessingDocument.Open(ms, true))
         {
+            // First-seen key → index, matching the order ExtractFields returns.
+            Dictionary<string, int>? markIndex = null;
+            if (marks)
+            {
+                markIndex = new Dictionary<string, int>(StringComparer.Ordinal);
+                foreach (var para in EnumerateParagraphs(doc))
+                    foreach (Match m in PlaceholderRegex().Matches(GetParagraphText(para)))
+                    {
+                        var key = ParseSpec(m.Groups[1].Value).Key;
+                        if (key.Length > 0 && !markIndex.ContainsKey(key))
+                            markIndex[key] = markIndex.Count;
+                    }
+            }
+
             foreach (var para in EnumerateParagraphs(doc))
-                ReplaceInParagraph(para, values);
+                ReplaceInParagraph(para, values, markIndex);
         }
         return ms.ToArray();
     }
@@ -199,7 +222,8 @@ public sealed partial class DocxPlaceholderService
 
     // --- replacement ----------------------------------------------------------
 
-    private static void ReplaceInParagraph(Paragraph para, IReadOnlyDictionary<string, string> values)
+    private static void ReplaceInParagraph(
+        Paragraph para, IReadOnlyDictionary<string, string> values, Dictionary<string, int>? markIndex)
     {
         var nodes = DirectTextNodes(para);
         if (nodes.Count == 0) return;
@@ -228,8 +252,20 @@ public sealed partial class DocxPlaceholderService
         {
             var m = matches[mi];
             var spec = ParseSpec(m.Groups[1].Value);
-            if (!values.TryGetValue(spec.Key, out var raw)) continue; // leave unknown tokens
+            if (!values.TryGetValue(spec.Key, out var raw))
+            {
+                if (markIndex is null) continue;   // normal mode: leave unknown tokens
+                raw = string.Empty;                // marks mode: still mark the blank
+            }
             var value = FormatValue(spec, raw ?? string.Empty, rtlContext);
+
+            // In marks mode, wrap the value so the browser can locate this placeholder.
+            if (markIndex is not null && markIndex.TryGetValue(spec.Key, out var idx))
+            {
+                var tag = idx.ToString(CultureInfo.InvariantCulture);
+                value = $"{MarkStart}{tag}{MarkSep}{value}{MarkEnd}";
+            }
+
             // Dates keep the paragraph's direction (a number renders LTR internally);
             // other fields get a direction tag from their own script.
             ReplaceRange(nodes, starts, lens, m.Index, m.Index + m.Length, value,

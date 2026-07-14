@@ -47,6 +47,8 @@
                 No <code>{{placeholders}}</code> were found in this document.
             </div>
 
+            <p class="inline-hint">✏️ Editing on the page — click any highlighted field in the preview.</p>
+
             <div class="actions" id="actions" hidden>
                 <button type="button" id="downloadBtn" class="btn btn-primary">
                     ⬇️ Download filled .docx
@@ -60,10 +62,17 @@
         <section class="panel preview-panel">
             <div class="preview-head">
                 <h2>Preview</h2>
-                <span class="preview-hint" id="previewHint">Upload a document to begin</span>
+                <div class="preview-head-right">
+                    <div class="mode-toggle" id="modeToggle" hidden>
+                        <button type="button" class="mode-btn is-active" data-mode="panel">Side panel</button>
+                        <button type="button" class="mode-btn" data-mode="inline">Inline edit</button>
+                    </div>
+                    <span class="preview-hint" id="previewHint">Upload a document to begin</span>
+                </div>
             </div>
             <div id="previewScroll" class="preview-scroll">
                 <div id="preview" class="preview-doc"></div>
+                <div id="overlay" class="overlay-layer"></div>
             </div>
             <div id="previewOverlay" class="preview-overlay" hidden>
                 <div class="spinner"></div>

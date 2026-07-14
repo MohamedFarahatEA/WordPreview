@@ -7,7 +7,17 @@ builder.Services.AddSingleton<DocxPlaceholderService>();
 var app = builder.Build();
 
 app.UseDefaultFiles();
-app.UseStaticFiles();
+// Don't let browsers cache the static assets during development, so edits to
+// index.html / app.js / site.css always show up on reload.
+app.UseStaticFiles(new StaticFileOptions
+{
+    OnPrepareResponse = ctx =>
+    {
+        ctx.Context.Response.Headers.CacheControl = "no-cache, no-store, must-revalidate";
+        ctx.Context.Response.Headers.Pragma = "no-cache";
+        ctx.Context.Response.Headers.Expires = "0";
+    }
+});
 
 const long MaxUploadBytes = 25 * 1024 * 1024; // 25 MB
 const string DocxContentType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
@@ -75,10 +85,13 @@ app.MapPost("/api/fill", async (HttpRequest request, DocxPlaceholderService svc)
         }
     }
 
+    // "marks" mode wraps each placeholder in locator sentinels for the inline editor.
+    var marks = string.Equals(form["marks"].ToString(), "true", StringComparison.OrdinalIgnoreCase);
+
     try
     {
         await using var stream = file.OpenReadStream();
-        var bytes = svc.Fill(stream, values);
+        var bytes = svc.Fill(stream, values, marks);
         var outName = BuildOutputName(file.FileName);
         return Results.File(bytes, DocxContentType, outName);
     }

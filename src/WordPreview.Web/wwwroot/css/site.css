@@ -147,8 +147,48 @@ code {
 }
 .preview-head h2 { margin: 0; font-size: 15px; }
 .preview-hint { color: var(--ink-soft); font-size: 12.5px; }
+.preview-head-right { display: flex; align-items: center; gap: 12px; }
+
+/* view toggle */
+.mode-toggle { display: inline-flex; border: 1px solid #cfd6e2; border-radius: 8px; overflow: hidden; }
+.mode-btn {
+    border: none; background: #fff; padding: 5px 11px; font: inherit; font-size: 12.5px;
+    cursor: pointer; color: var(--ink-soft); border-left: 1px solid #cfd6e2;
+}
+.mode-btn:first-child { border-left: none; }
+.mode-btn.is-active { background: var(--brand); color: #fff; }
+
+/* inline-edit mode: collapse the form fields, keep file + download controls */
+.mode-inline #fieldsWrap,
+.mode-inline #emptyFields { display: none !important; }
+.mode-inline .inline-hint { display: block; }
+.inline-hint {
+    display: none; margin-top: 16px; padding: 11px 13px; border-radius: 9px;
+    background: var(--brand-soft); color: var(--brand-ink); font-size: 13px;
+}
+
+/* overlay layer sits inside the scroll container and scrolls with the document */
+.overlay-layer { position: absolute; top: 0; left: 0; pointer-events: none; z-index: 5; }
+.ph-anchor { color: transparent !important; } /* hide underlying value; the input shows it */
+
+.ph-input {
+    position: absolute; box-sizing: border-box; margin: 0; padding: 0 2px;
+    border: 1px solid rgba(37, 99, 235, .45);
+    background: rgba(37, 99, 235, .10);
+    border-radius: 3px; pointer-events: auto; line-height: 1.1;
+    color: inherit; overflow: hidden; white-space: nowrap;
+}
+.ph-input::placeholder { color: rgba(37, 99, 235, .55); }
+.ph-input:hover { background: rgba(37, 99, 235, .16); }
+.ph-input:focus {
+    outline: none; background: #fff;
+    border-color: var(--brand); box-shadow: 0 0 0 2px rgba(37, 99, 235, .3);
+    overflow: visible; z-index: 6;
+}
+select.ph-input { padding: 0; }
 
 .preview-scroll {
+    position: relative;
     flex: 1; overflow: auto; padding: 22px;
     background: #edeff3;
     border-radius: 0 0 var(--radius) var(--radius);
