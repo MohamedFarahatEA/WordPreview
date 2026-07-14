@@ -110,12 +110,13 @@ code {
     color: var(--ink-soft); margin-bottom: 5px;
 }
 .field label .key { color: var(--ink); }
-.field input[type=text], .field textarea {
+.field input[type=text], .field input[type=date], .field textarea, .field select {
     width: 100%; padding: 9px 11px; font: inherit; font-size: 14px;
     border: 1px solid #cfd6e2; border-radius: 8px; background: #fff; color: var(--ink);
     transition: border-color .12s, box-shadow .12s;
 }
-.field input:focus, .field textarea:focus {
+.field select { cursor: pointer; appearance: auto; }
+.field input:focus, .field textarea:focus, .field select:focus {
     outline: none; border-color: var(--brand);
     box-shadow: 0 0 0 3px rgba(37, 99, 235, .15);
 }

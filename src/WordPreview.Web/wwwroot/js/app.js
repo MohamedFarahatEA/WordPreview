@@ -22,7 +22,7 @@
 
     // Current session state.
     let currentFile = null;          // File object of the uploaded .docx
-    let placeholders = [];           // string[] distinct keys
+    let fields = [];                 // field descriptors: {key,type,format,options}
     let renderSeq = 0;               // guards out-of-order async renders
 
     // --- upload wiring --------------------------------------------------------
@@ -64,11 +64,11 @@
             const data = await res.json();
             if (!res.ok) throw new Error(data.error || "Analyze failed.");
 
-            placeholders = data.placeholders || [];
-            buildForm(placeholders);
+            fields = data.fields || [];
+            buildForm(fields);
             setStatus("");
-            previewHint.textContent = placeholders.length
-                ? `${placeholders.length} field${placeholders.length === 1 ? "" : "s"}`
+            previewHint.textContent = fields.length
+                ? `${fields.length} field${fields.length === 1 ? "" : "s"}`
                 : "No placeholders";
             await renderPreview(); // initial render (values empty)
         } catch (err) {
@@ -77,11 +77,11 @@
         }
     }
 
-    function buildForm(keys) {
+    function buildForm(list) {
         fieldsForm.innerHTML = "";
-        fieldCount.textContent = String(keys.length);
+        fieldCount.textContent = String(list.length);
 
-        if (keys.length === 0) {
+        if (list.length === 0) {
             fieldsWrap.hidden = true;
             emptyFields.hidden = false;
             actions.hidden = false; // still allow downloading a copy
@@ -91,27 +91,54 @@
         fieldsWrap.hidden = false;
         actions.hidden = false;
 
-        for (const key of keys) {
+        for (const field of list) {
             const wrap = document.createElement("div");
             wrap.className = "field";
 
             const label = document.createElement("label");
-            label.htmlFor = fieldId(key);
-            label.innerHTML = `<span class="key"></span>`;
-            label.querySelector(".key").textContent = key;
+            label.htmlFor = fieldId(field.key);
+            const keySpan = document.createElement("span");
+            keySpan.className = "key";
+            keySpan.textContent = field.key;
+            keySpan.setAttribute("dir", "auto");
+            label.append(keySpan);
 
-            // Multi-line-ish keys (address, notes, description) get a textarea.
-            const multiline = /address|notes?|description|comment|details|body/i.test(key);
-            const input = multiline ? document.createElement("textarea") : document.createElement("input");
-            if (!multiline) input.type = "text";
-            input.id = fieldId(key);
-            input.dataset.key = key;
-            input.placeholder = key;
-            input.addEventListener("input", onFieldInput);
-
-            wrap.append(label, input);
+            const control = createControl(field);
+            wrap.append(label, control);
             fieldsForm.append(wrap);
         }
+    }
+
+    // Builds the right input control for a field descriptor {key,type,format,options}.
+    function createControl(field) {
+        let control;
+        switch (field.type) {
+            case "date":
+                control = document.createElement("input");
+                control.type = "date";
+                break;
+            case "select":
+                control = document.createElement("select");
+                control.append(new Option("— Select —", ""));
+                for (const opt of field.options || []) control.append(new Option(opt, opt));
+                break;
+            case "multiline":
+                control = document.createElement("textarea");
+                control.placeholder = field.key;
+                break;
+            default:
+                control = document.createElement("input");
+                control.type = "text";
+                control.placeholder = field.key;
+        }
+        control.id = fieldId(field.key);
+        control.dataset.key = field.key;
+        // Auto-detect direction: Arabic values align RTL, Latin values LTR.
+        control.setAttribute("dir", "auto");
+        // `input` covers text/textarea/date; `change` covers <select>.
+        control.addEventListener("input", onFieldInput);
+        control.addEventListener("change", onFieldInput);
+        return control;
     }
 
     const onFieldInput = debounce(() => renderPreview(), 350);
@@ -144,6 +171,7 @@
                 breakPages: true,
                 experimental: true,
             });
+            if (seq === renderSeq) applyAutoDirection(previewEl);
         } catch (err) {
             if (seq === renderSeq) {
                 previewEl.innerHTML =
@@ -152,6 +180,35 @@
         } finally {
             if (seq === renderSeq) previewOverlay.hidden = true;
         }
+    }
+
+    // docx-preview only right-aligns paragraphs that carry an explicit RTL property.
+    // Word, however, auto-detects Arabic/Hebrew and shows it RTL. Match that in the
+    // preview: for any block whose first strong character is RTL, set dir="rtl" and,
+    // if it's left/start-aligned, flip it to right — while leaving center/justify
+    // paragraphs alone so intentional layouts survive. Preview-only; the downloaded
+    // file is never touched.
+    function applyAutoDirection(root) {
+        const blocks = root.querySelectorAll("p, h1, h2, h3, h4, h5, h6, li, td, th, div");
+        for (const el of blocks) {
+            if (!isRtlText(el.textContent || "")) continue;
+            el.setAttribute("dir", "rtl");
+            const align = getComputedStyle(el).textAlign;
+            if (align === "left" || align === "start") el.style.textAlign = "right";
+        }
+    }
+
+    // First-strong-character heuristic (same rule the browser uses for dir="auto"):
+    // true if the first letter that has a direction is Arabic/Hebrew.
+    function isRtlText(s) {
+        for (const ch of s) {
+            const c = ch.codePointAt(0);
+            if ((c >= 0x0590 && c <= 0x08FF) || (c >= 0xFB50 && c <= 0xFDFF) || (c >= 0xFE70 && c <= 0xFEFF))
+                return true;
+            if ((c >= 0x41 && c <= 0x5A) || (c >= 0x61 && c <= 0x7A) || (c >= 0xC0 && c <= 0x24F))
+                return false;
+        }
+        return false;
     }
 
     // Calls the backend to substitute values and returns the resulting .docx blob.
@@ -196,7 +253,7 @@
 
     function resetAll() {
         currentFile = null;
-        placeholders = [];
+        fields = [];
         fileInput.value = "";
         fieldsForm.innerHTML = "";
         previewEl.innerHTML = "";

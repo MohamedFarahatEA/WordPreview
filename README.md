@@ -9,6 +9,23 @@ values straight into the original OpenXML — it never converts the document to 
 back, so styles, fonts, tables, headers/footers, margins, page size, and right-to-left
 (Arabic/Hebrew) layout all stay exactly as authored.
 
+## Placeholder syntax
+
+A modifier after `|` chooses the field type. Plain `{{name}}` still works and the type
+is inferred from the name.
+
+| In the Word file | Form control |
+|------------------|--------------|
+| `{{client_name}}` | text box |
+| `{{Date}}` | **date picker** — inferred for any name containing "date" |
+| `{{issue_date \| date : dd/MM/yyyy}}` | date picker, custom output format |
+| `{{status \| select : Draft, Approved, Rejected}}` | **dropdown** with those options |
+| `{{notes \| multiline}}` | multi-line text area — also inferred for `address`, `notes`, `description`, … |
+| `{{Ref \| text}}` | force a plain text box (opt out of inference) |
+
+Dates are picked in the browser and formatted on the server per the token's format
+(default `yyyy-MM-dd`). Spaces around keys, `|`, `:`, and option commas are all trimmed.
+
 ## How it works
 
 1. **Upload** a `.docx`. The server scans it for `{{placeholder}}` tokens using the

@@ -1,29 +1,48 @@
+using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
+using WordPreview.Web.Models;
 
 namespace WordPreview.Web.Services;
 
 /// <summary>
-/// Scans and fills <c>{{placeholder}}</c> tokens inside a .docx while leaving every
-/// other byte of formatting (styles, page size, margins, tables, headers/footers)
-/// untouched. Works directly on the OpenXML — it never converts to HTML and back.
+/// Scans and fills placeholder tokens inside a .docx while leaving every other byte
+/// of formatting (styles, page size, margins, tables, headers/footers) untouched.
+/// Works directly on the OpenXML — it never converts to HTML and back.
+///
+/// Token syntax:
+///   {{ key }}                        text (or inferred date/multiline from the name)
+///   {{ key | text }}                 force plain text
+///   {{ key | date }}                 date picker, output yyyy-MM-dd
+///   {{ key | date : dd/MM/yyyy }}    date picker, custom output format
+///   {{ key | select : A, B, C }}     dropdown with the given options
+///   {{ key | multiline }}            multi-line text area
+///
+/// Inserted values are also tagged with a run direction (w:rtl) inferred from their
+/// script, so Arabic values render right-to-left and Latin values left-to-right no
+/// matter which direction the surrounding paragraph uses.
 /// </summary>
 public sealed partial class DocxPlaceholderService
 {
-    // {{ name }} — inner text is any chars except braces; spaces around are trimmed.
+    // {{ ...anything but braces... }} — inner text parsed by ParseSpec.
     [GeneratedRegex(@"\{\{\s*([^{}]+?)\s*\}\}", RegexOptions.Compiled)]
     private static partial Regex PlaceholderRegex();
 
-    /// <summary>Returns the distinct placeholder keys in first-seen order.</summary>
-    public IReadOnlyList<string> ExtractPlaceholders(Stream docxStream)
-    {
-        var seen = new List<string>();
-        var set = new HashSet<string>(StringComparer.Ordinal);
+    private const string DefaultDateFormat = "yyyy-MM-dd";
 
-        // Open read-only on a copy so the caller's stream stays reusable.
+    private enum FieldType { Text, Multiline, Date, Select }
+
+    private sealed record Spec(string Key, FieldType Type, string? Format, List<string>? Options);
+
+    /// <summary>Returns the distinct fields in first-seen order.</summary>
+    public IReadOnlyList<PlaceholderField> ExtractFields(Stream docxStream)
+    {
+        var order = new List<string>();
+        var byKey = new Dictionary<string, Spec>(StringComparer.Ordinal);
+
         using var ms = ToSeekableCopy(docxStream);
         using var doc = WordprocessingDocument.Open(ms, false);
 
@@ -33,16 +52,24 @@ public sealed partial class DocxPlaceholderService
             if (full.Length == 0) continue;
             foreach (Match m in PlaceholderRegex().Matches(full))
             {
-                var key = m.Groups[1].Value.Trim();
-                if (key.Length > 0 && set.Add(key)) seen.Add(key);
+                var spec = ParseSpec(m.Groups[1].Value);
+                if (spec.Key.Length == 0 || byKey.ContainsKey(spec.Key)) continue;
+                byKey[spec.Key] = spec;
+                order.Add(spec.Key);
             }
         }
-        return seen;
+
+        return order.Select(k =>
+        {
+            var s = byKey[k];
+            return new PlaceholderField(s.Key, s.Type.ToString().ToLowerInvariant(), s.Format, s.Options);
+        }).ToList();
     }
 
     /// <summary>
     /// Produces a new .docx with placeholders replaced by <paramref name="values"/>.
-    /// Unknown tokens are left as-is. Newlines in a value become Word line breaks.
+    /// Values are formatted per each token's spec (e.g. dates). Unknown tokens are
+    /// left as-is; newlines in a value become Word line breaks.
     /// </summary>
     public byte[] Fill(Stream docxStream, IReadOnlyDictionary<string, string> values)
     {
@@ -53,6 +80,73 @@ public sealed partial class DocxPlaceholderService
                 ReplaceInParagraph(para, values);
         }
         return ms.ToArray();
+    }
+
+    // --- spec parsing ---------------------------------------------------------
+
+    private static Spec ParseSpec(string inner)
+    {
+        int pipe = inner.IndexOf('|');
+        if (pipe < 0)
+        {
+            var key = inner.Trim();
+            var t = InferType(key);
+            return new Spec(key, t, t == FieldType.Date ? DefaultDateFormat : null, null);
+        }
+
+        var name = inner[..pipe].Trim();
+        var rest = inner[(pipe + 1)..].Trim();
+
+        string typeToken = rest;
+        string arg = string.Empty;
+        int colon = rest.IndexOf(':');
+        if (colon >= 0)
+        {
+            typeToken = rest[..colon].Trim();
+            arg = rest[(colon + 1)..].Trim();
+        }
+
+        switch (typeToken.ToLowerInvariant())
+        {
+            case "date":
+                return new Spec(name, FieldType.Date,
+                    string.IsNullOrWhiteSpace(arg) ? DefaultDateFormat : arg, null);
+            case "select":
+            case "dropdown":
+            case "choice":
+                var opts = arg.Split(',')
+                    .Select(s => s.Trim())
+                    .Where(s => s.Length > 0)
+                    .ToList();
+                return new Spec(name, FieldType.Select, null, opts);
+            case "multiline":
+            case "textarea":
+                return new Spec(name, FieldType.Multiline, null, null);
+            case "text":
+                return new Spec(name, FieldType.Text, null, null);
+            default:
+                var inferred = InferType(name);
+                return new Spec(name, inferred, inferred == FieldType.Date ? DefaultDateFormat : null, null);
+        }
+    }
+
+    private static FieldType InferType(string key)
+    {
+        if (Regex.IsMatch(key, "date", RegexOptions.IgnoreCase)) return FieldType.Date;
+        if (Regex.IsMatch(key, "address|notes?|description|comment|details|body", RegexOptions.IgnoreCase))
+            return FieldType.Multiline;
+        return FieldType.Text;
+    }
+
+    private static string FormatValue(Spec spec, string raw)
+    {
+        if (spec.Type == FieldType.Date && !string.IsNullOrWhiteSpace(raw))
+        {
+            // Client sends ISO (yyyy-MM-dd) from the date picker; format per the spec.
+            if (DateTime.TryParse(raw, CultureInfo.InvariantCulture, DateTimeStyles.None, out var dt))
+                return dt.ToString(spec.Format ?? DefaultDateFormat, CultureInfo.InvariantCulture);
+        }
+        return raw;
     }
 
     // --- traversal ------------------------------------------------------------
@@ -87,8 +181,6 @@ public sealed partial class DocxPlaceholderService
         return sb.ToString();
     }
 
-    // Text nodes belonging to this paragraph, in document order. (A paragraph does
-    // not nest other paragraphs in normal documents, so Descendants is safe.)
     private static List<Text> DirectTextNodes(Paragraph para) => para.Descendants<Text>().ToList();
 
     // --- replacement ----------------------------------------------------------
@@ -114,19 +206,58 @@ public sealed partial class DocxPlaceholderService
         var matches = PlaceholderRegex().Matches(full);
         if (matches.Count == 0) return;
 
+        // Is this an Arabic/RTL paragraph? Dates in RTL context use Arabic-Indic digits.
+        bool rtlContext = ParagraphIsRtl(para, full);
+
         // Apply right-to-left so earlier matches keep valid global offsets.
         for (int mi = matches.Count - 1; mi >= 0; mi--)
         {
             var m = matches[mi];
-            var key = m.Groups[1].Value.Trim();
-            if (!values.TryGetValue(key, out var value)) continue; // leave unknown tokens
-            ReplaceRange(nodes, starts, lens, m.Index, m.Index + m.Length, value ?? string.Empty);
+            var spec = ParseSpec(m.Groups[1].Value);
+            if (!values.TryGetValue(spec.Key, out var raw)) continue; // leave unknown tokens
+            var value = FormatValue(spec, raw ?? string.Empty);
+            if (spec.Type == FieldType.Date && rtlContext && value.Length > 0)
+            {
+                // Arabic-Indic digits, wrapped in a right-to-left isolate so the date
+                // flows RTL like the rest of an Arabic document, as its own isolated
+                // segment (day on the left, year on the right).
+                const char rli = '⁧'; // RIGHT-TO-LEFT ISOLATE
+                const char pdi = '⁩'; // POP DIRECTIONAL ISOLATE
+                value = $"{rli}{ToArabicIndicDigits(value)}{pdi}";
+            }
+            // Dates keep the paragraph's direction (the isolate handles their layout);
+            // other fields get a direction tag from their own script.
+            ReplaceRange(nodes, starts, lens, m.Index, m.Index + m.Length, value,
+                tagDirection: spec.Type != FieldType.Date);
         }
+    }
+
+    private static bool ParagraphIsRtl(Paragraph para, string text)
+    {
+        var bidi = para.ParagraphProperties?.GetFirstChild<BiDi>();
+        if (bidi is not null)
+            return bidi.Val is null || bidi.Val.Value;
+        return DetectDir(text) == TextDir.Rtl;
+    }
+
+    // 0-9 -> Arabic-Indic ٠-٩ (U+0660..U+0669). Other characters (/, -, .) unchanged.
+    private static string ToArabicIndicDigits(string s)
+    {
+        char[]? buf = null;
+        for (int i = 0; i < s.Length; i++)
+        {
+            if (s[i] >= '0' && s[i] <= '9')
+            {
+                buf ??= s.ToCharArray();
+                buf[i] = (char)(0x0660 + (s[i] - '0'));
+            }
+        }
+        return buf is null ? s : new string(buf);
     }
 
     private static void ReplaceRange(
         List<Text> nodes, int[] starts, int[] lens,
-        int rangeStart, int rangeEnd, string replacement)
+        int rangeStart, int rangeEnd, string replacement, bool tagDirection)
     {
         for (int i = 0; i < nodes.Count; i++)
         {
@@ -143,13 +274,11 @@ public sealed partial class DocxPlaceholderService
             bool ownsStart = nStart <= rangeStart && rangeStart < nEnd;
             if (!ownsStart)
             {
-                // A middle/end node: drop the covered portion, keep the rest.
                 nodes[i].Text = prefix + suffix;
                 nodes[i].Space = SpaceProcessingModeValues.Preserve;
                 continue;
             }
 
-            // The node that owns the start of the placeholder receives the value.
             if (replacement.IndexOf('\n') < 0 && replacement.IndexOf('\r') < 0)
             {
                 nodes[i].Text = prefix + replacement + suffix;
@@ -159,7 +288,51 @@ public sealed partial class DocxPlaceholderService
             {
                 WriteMultiline(nodes[i], prefix, replacement, suffix);
             }
+
+            // When the placeholder occupies this run by itself, tag the run's
+            // direction from the value's script so Arabic values render RTL and
+            // Latin values render LTR — regardless of the paragraph's direction.
+            if (tagDirection && prefix.Length == 0 && suffix.Length == 0 && nodes[i].Parent is Run valueRun)
+                ApplyDirection(valueRun, replacement);
         }
+    }
+
+    private enum TextDir { Neutral, Ltr, Rtl }
+
+    // Dominant script of a string: RTL (Arabic/Hebrew), LTR (Latin), or Neutral
+    // (only digits/punctuation/whitespace — keep the inherited direction).
+    private static TextDir DetectDir(string s)
+    {
+        int rtl = 0, ltr = 0;
+        foreach (var ch in s)
+        {
+            int c = ch;
+            // Hebrew + Arabic blocks (U+0590–U+08FF), Arabic presentation forms
+            // A (U+FB50–U+FDFF) and B (U+FE70–U+FEFF).
+            if ((c >= 0x0590 && c <= 0x08FF) ||
+                (c >= 0xFB50 && c <= 0xFDFF) ||
+                (c >= 0xFE70 && c <= 0xFEFF))
+                rtl++;
+            // Latin letters (Basic + Latin-1 Supplement + Extended-A/B, U+00C0–U+024F).
+            else if ((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+                     (c >= 0x00C0 && c <= 0x024F))
+                ltr++;
+        }
+        if (rtl == 0 && ltr == 0) return TextDir.Neutral;
+        return rtl > ltr ? TextDir.Rtl : TextDir.Ltr;
+    }
+
+    private static void ApplyDirection(Run run, string value)
+    {
+        var dir = DetectDir(value);
+        if (dir == TextDir.Neutral) return; // dates/numbers: inherit paragraph direction
+
+        var rpr = run.GetFirstChild<RunProperties>();
+        if (rpr is null) { rpr = new RunProperties(); run.PrependChild(rpr); }
+
+        var rtl = rpr.GetFirstChild<RightToLeftText>();
+        if (rtl is null) { rtl = new RightToLeftText(); rpr.AppendChild(rtl); }
+        rtl.Val = OnOffValue.FromBoolean(dir == TextDir.Rtl);
     }
 
     // Writes a value containing newlines as Text/Break siblings within the same run,

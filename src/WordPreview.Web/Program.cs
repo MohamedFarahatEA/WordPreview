@@ -33,8 +33,8 @@ app.MapPost("/api/analyze", async (HttpRequest request, DocxPlaceholderService s
     try
     {
         await using var stream = file.OpenReadStream();
-        var placeholders = svc.ExtractPlaceholders(stream);
-        return Results.Ok(new AnalyzeResponse(file.FileName, placeholders));
+        var fields = svc.ExtractFields(stream);
+        return Results.Ok(new AnalyzeResponse(file.FileName, fields));
     }
     catch (Exception ex)
     {
