@@ -170,6 +170,8 @@ code {
 /* overlay layer sits inside the scroll container and scrolls with the document */
 .overlay-layer { position: absolute; top: 0; left: 0; pointer-events: none; z-index: 5; }
 .ph-anchor { color: transparent !important; } /* hide underlying value; the input shows it */
+/* Empty blanks reserve space so their overlay box doesn't cover neighbouring text. */
+.ph-anchor.is-empty { display: inline-block; min-width: 4em; vertical-align: baseline; }
 
 .ph-input {
     position: absolute; box-sizing: border-box; margin: 0; padding: 0 2px;

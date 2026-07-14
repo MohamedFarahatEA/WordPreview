@@ -268,7 +268,14 @@
                 span.className = "ph-anchor";
                 span.dataset.fieldIndex = m[1];
                 span.dataset.color = color;
-                span.textContent = m[2].length ? m[2] : "​"; // ZWSP keeps a line box
+                if (m[2].length) {
+                    span.textContent = m[2];
+                } else {
+                    // Empty blank: reserve space in the flow so the box doesn't
+                    // overlap the following text (see .ph-anchor.is-empty).
+                    span.textContent = "​"; // ZWSP keeps a line box
+                    span.classList.add("is-empty");
+                }
                 frag.appendChild(span);
                 last = m.index + m[0].length;
             }
